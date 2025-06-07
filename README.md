@@ -2,8 +2,6 @@
 
 This repository contains an R Markdown project designed for analyzing ecological data related to Gilded Sapphire hummingbird populations. It employs both **Occupancy Models** (using the `unmarked` package) and **N-mixture Models** (using Bayesian inference with `R2jags`) to estimate population parameters while accounting for imperfect detection.
 
-The project demonstrates a robust workflow for ecological modeling, from data preparation and model fitting to model comparison and visualization of results.
-
 ## Table of Contents
 
 * [Project Overview](#project-overview)
