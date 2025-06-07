@@ -1,0 +1,11 @@
+ID_transecta	habitat_type
+116_e_64_y_65	street
+13_e_46_y_47	street
+69_e_17_y_16	street
+69_e_4_y_5	street
+7_e_45_y_46	street
+belgrano	park
+bosque	park
+matheu	park
+saavedra	park
+san_martin	park

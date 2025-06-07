@@ -1,0 +1,11 @@
+transect	y.1	y.2	y.3	y.4	y.5	y.6	y.7	y.8	y.9	y.10	y.11	y.12	habitat_type
+116_e_64_e_65	0	1	0	0	0	0	0	0	0	1	0	0	streets
+69_e_17_y_16	0	0	0	0	0	1	0	1	0	0	0	0	streets
+69_e_4_y_5	0	0	0	1	1	0	0	1	0	0	0	0	streets
+7_e_45_y_46 	0	0	0	0	0	0	0	0	0	0	1	0	streets
+13_e_46_y_47	0	0	0	0	0	0	0	0	0	0	0	0	streets
+belgrano	1	0	0	1	0	0	1	1	0	0	0	0	parks
+matheu	0	0	0	1	1	2	3	1	2	2	0	0	parks
+saavedra	0	1	2	1	1	0	1	0	0	1	3	2	parks
+san_martin	0	0	0	0	0	1	0	0	0	0	0	0	parks
+bosque	0	0	0	0	0	0	0	0	0	0	0	0	parks
