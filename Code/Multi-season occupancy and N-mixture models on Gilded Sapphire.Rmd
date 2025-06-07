@@ -1,0 +1,876 @@
+---
+title: "Occupancy and N-mixture Models for Gilded Sapphire Hummingbirds"
+author: "R User"
+date: "June 7, 2025"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    theme: cosmo
+    highlight: tango # A pleasant syntax highlighting theme
+---
+
+```{r setup, include=TRUE}
+# Global knitr options for cleaner output and consistency
+knitr::opts_chunk$set(
+  echo = TRUE,      # Display code in output
+  message = FALSE,  # Suppress messages from packages/functions
+  warning = FALSE,  # Suppress warnings
+  cache = FALSE,    # Do not cache chunks (set to TRUE for long-running chunks once stable)
+  fig.align = "center", # Center figures by default
+  fig.width = 7,    # Default figure width
+  fig.height = 5    # Default figure height
+)
+```
+
+# Introduction
+
+This R Markdown document presents an analysis using Occupancy and N-mixture models for Gilded Sapphire hummingbirds. The analysis is divided into two main sections: Occupancy Models using `unmarked` package and N-mixture Models using `R2jags`.
+
+The R script provided loads detection history and covariate data, prepares it for modeling, fits several models, compares them, and generates plots for the best-fitting model.
+
+# 1. Occupancy Models
+
+This section focuses on multi-season occupancy modeling using the `unmarked` package. We will load and prepare the data, build an `unmarkedMultFrame` object, fit several `colext` models, and compare them using AICc.
+
+## 1.1 Load packages
+```{r load-libraries-occupancy}
+library(unmarked)
+library(AICcmodavg)
+library(tidyr)
+library(dplyr)
+```
+
+## 1.2 Load and prepare data
+
+Detection history, observation covariates (hour and flower abundance), site covariates (habitat type), and yearly site covariates (mean flower abundance per season) are loaded and formatted.
+```{r load-data-occupancy}
+# Load detection history (10 sites with 12 visits each)
+setwd("C:/")
+humm_abundance <- read.table("data_hummingbirds_lp.txt", head = T)
+detection_history <- 1*(humm_abundance[, 2:13]>0)
+
+# Split detection history by season
+spring <- data.frame(detection_history[, c(1:2, 12)], y1.na = NA)
+summer <- data.frame(detection_history[, 3:5], y2.na = NA)
+fall <- detection_history[, 6:9]
+winter <- data.frame(detection_history[, 10:11], y3.na = NA, y4.na = NA)
+y <- cbind(spring, summer, fall, winter)
+
+# Mean detection across seasons (for descriptive purposes)
+cat("Mean detection in Spring:", mean(as.matrix(spring[,1:3])), "\n")
+cat("Mean detection in Summer:", mean(as.matrix(summer[,1:3])), "\n")
+cat("Mean detection in Fall:", mean(as.matrix(fall[,1:4])), "\n")
+cat("Mean detection in Winter:", mean(as.matrix(winter[,1:2])), "\n")
+
+# Load observation covariates
+ObsCovs <- read.table("C:/RD/obs_covs_hummingbirds_lp.txt", head = T)
+
+# Reshape hour covariate to wide format for each season
+hour_wide <- ObsCovs %>%
+  select(ID_transecta, visit, hora_decimal) %>%
+  pivot_wider(
+    names_from = visit,
+    values_from = hora_decimal
+  )
+hour_spring <- data.frame(hour_wide[, c(2:3, 13)], x1.na = NA)
+hour_summer <- data.frame(hour_wide[, 4:6], x2.na = NA)
+hour_fall <- hour_wide[, 7:10]
+hour_winter <- data.frame(hour_wide[, 11:12], x3.na = NA, x4.na = NA)
+hour_wide <- cbind(hour_spring, hour_summer, hour_fall, hour_winter)
+
+# Reshape flower abundance covariate to wide format for each season
+flower_wide <- ObsCovs %>%
+  select(ID_transecta, visit, flower_abun) %>%
+  pivot_wider(
+    names_from = visit,
+    values_from = flower_abun
+  )
+flower_spring <- data.frame(flower_wide[, c(2:3, 13)], x1.na = NA)
+flower_summer <- data.frame(flower_wide[, 4:6], x2.na = NA)
+flower_fall <- flower_wide[, 7:10]
+flower_winter <- data.frame(flower_wide[, 11:12], x3.na = NA, x4.na = NA)
+flower_wide <- cbind(flower_spring, flower_summer, flower_fall, flower_winter)
+
+# Load site covariates
+siteCovs <- read.table("C:/RD/site_covs_hummingbirds_lp.txt", head = T)
+siteCovs$habitat_type <- as.factor(siteCovs$habitat_type)
+
+# Load yearly site covariates
+yearlySiteCovs <- read.table("C:/RD/yearly_site_covs_hummingbirds_lp.txt", head = T)
+flower_matrix <- yearlySiteCovs %>%
+  arrange(ID_transecta, season) %>%
+  pivot_wider(names_from = season,
+              values_from = mean_flower_abundance,
+              names_prefix = "season") %>%
+  select(starts_with("season")) %>%
+  as.matrix()
+flower_matrix <- flower_matrix[, c(2:3,1,4)] # ensure order (Spring, Summer, Fall, Winter)
+
+# Check dimensions of prepared data
+dim(y)
+dim(flower_wide)
+dim(hour_wide)
+dim(siteCovs)
+dim(flower_matrix)
+```
+
+## 1.3 Build `unmarkedMultFrame` Object
+
+The `unmarkedMultFrame` object is created, which is a specialized data structure required by `unmarked` for multi-season occupancy models.
+
+```{r build-unmarkedmultframe}
+humm_unmarkedMultFrame <- unmarkedMultFrame(
+  y = as.matrix(y),
+  numPrimary = 4, # 4 primary seasons (spring, summer, fall, winter)
+  obsCovs = list(hour = hour_wide,
+                 flower_abun = flower_wide),
+  siteCovs = data.frame(habitat_type = siteCovs[,-1]), # Exclude ID column
+  yearlySiteCovs = list(mean_flower_abundance = flower_matrix)
+)
+```
+
+## 1.4 Multi-season Occupancy Models
+
+Several `colext` models are fitted to analyze occupancy, colonization, extinction, and detection probabilities under different covariate structures.
+
+### Null Model (`fm0`)
+
+This model assumes constant occupancy, colonization, extinction, and detection probabilities.
+
+```{r fit-fm0}
+fm0 <- colext(
+  psiformula = ~1,
+  gammaformula = ~1,
+  epsilonformula = ~1,
+  pformula = ~1,
+  data = humm_unmarkedMultFrame,
+  method = "BFGS"
+)
+print(summary(fm0))
+```
+
+### Time Model (`fm1`)
+
+This model investigates the effect of `hour` and `flower_abun` on detection probability, while other parameters remain constant.
+
+```{r fit-fm1}
+fm1 <- colext(
+  psiformula = ~1,
+  gammaformula = ~1,
+  epsilonformula = ~1,
+  pformula = ~hour + flower_abun,
+  data = humm_unmarkedMultFrame,
+  method = "BFGS"
+)
+print(summary(fm1))
+```
+
+### Habitat Model (`fm2`)
+
+This model explores the influence of `habitat_type` on colonization and extinction probabilities, with detection depending on `hour`.
+
+```{r fit-fm2}
+fm2 <- colext(
+  psiformula = ~1,
+  gammaformula = ~habitat_type,
+  epsilonformula = ~habitat_type,
+  pformula = ~hour,
+  data = humm_unmarkedMultFrame,
+  method = "BFGS"
+)
+print(summary(fm2))
+```
+
+### Flower Model (`fm3`)
+
+This model assesses the impact of mean `flower_abundance` on colonization and extinction probabilities, with detection depending on `hour` and `flower_abun`.
+
+```{r fit-fm3}
+fm3 <- colext(
+  psiformula = ~1,
+  gammaformula = ~mean_flower_abundance, # Note: using the yearlySiteCovs for gamma/epsilon
+  epsilonformula = ~mean_flower_abundance,
+  pformula = ~hour + flower_abun,
+  data = humm_unmarkedMultFrame,
+  method = "BFGS"
+)
+print(summary(fm3))
+```
+
+## 1.5 Model Comparison (AICc)
+
+The models are compared using AICc to determine the best-fitting model.
+
+```{r aic-table-occupancy}
+models <- list(
+  'p(.)psi(.)' = fm0,
+  'p(hour, flower abundance)' = fm1,
+  'p(hour)gamma(habitat_type)epsilon(habitat_type)' = fm2,
+  'p(hour, flower_abundance)gamma(mean_flower_abundance)epsilon(mean_flower_abundance)' = fm3
+)
+
+aicTable <- aictab(models)
+print(aicTable)
+write.csv(aicTable, "aicTable.csv", row.names = FALSE)
+```
+
+## 1.6 Back-transformed Parameters (Null Model Example)
+
+Example of back-transforming parameters for the null model to get probabilities/rates.
+
+```{r backtransform-fm0}
+backTransform(fm0, type = "psi")
+backTransform(fm0, type = "col")
+backTransform(fm0, type = "ext")
+backTransform(fm0, type = "det")
+```
+
+# 2. N-mixture Models
+
+This section delves into N-mixture models, which estimate abundance while accounting for imperfect detection. We will use `R2jags` for Bayesian inference.
+
+## 2.1 Load packages
+
+```{r load-libraries-nmixture}
+library(R2jags)
+library(coda)
+library(dplyr)
+library(tidyr)
+```
+
+## 2.2 Reformat Data for N-mixture Models
+
+The data needs to be restructured into a 3D array (`y_array`, `hour_array`, `flower_array`) suitable for JAGS, with dimensions [sites, seasons, surveys].
+
+```{r reformat-data-nmixture}
+humm_abundance <- read.table("C:/RD/data_hummingbirds_lp.txt", head = T)
+y_wide <- humm_abundance[, 2:13]
+Jmax <- 4  # max surveys per season
+T_seasons <- 4     # number of primary periods (seasons)
+I_sites <- nrow(y_wide)
+
+spring <- data.frame(y_wide[, c(1:2, 12)], y1.na = NA)
+summer <- data.frame(y_wide[, 3:5], y2.na = NA)
+fall <- y_wide[, 6:9]
+winter <- data.frame(y_wide[, 10:11], y3.na = NA, y4.na = NA)
+y <- cbind(spring, summer, fall, winter)
+
+# Load covariate data (already loaded for occupancy, but re-run for clarity)
+ObsCovs <- read.table("C:/RD/obs_covs_hummingbirds_lp.txt", head = T)
+
+hour_wide <- ObsCovs %>%
+  select(ID_transecta, visit, hora_decimal) %>%
+  pivot_wider(
+    names_from = visit,
+    values_from = hora_decimal
+  )
+hour_spring <- data.frame(hour_wide[, c(2:3, 13)], x1.na = NA)
+hour_summer <- data.frame(hour_wide[, 4:6], x2.na = NA)
+hour_fall <- hour_wide[, 7:10]
+hour_winter <- data.frame(hour_wide[, 11:12], x3.na = NA, x4.na = NA)
+hour_wide <- cbind(hour_spring, hour_summer, hour_fall, hour_winter)
+
+flower_wide <- ObsCovs %>%
+  select(ID_transecta, visit, flower_abun) %>%
+  pivot_wider(
+    names_from = visit,
+    values_from = flower_abun
+  )
+flower_spring <- data.frame(flower_wide[, c(2:3, 13)], x1.na = NA)
+flower_summer <- data.frame(flower_wide[, 4:6], x2.na = NA)
+flower_fall <- flower_wide[, 7:10]
+flower_winter <- data.frame(flower_wide[, 11:12], x3.na = NA, x4.na = NA)
+flower_wide <- cbind(flower_spring, flower_summer, flower_fall, flower_winter)
+
+siteCovs <- read.table("C:/RD/site_covs_hummingbirds_lp.txt", head = T)
+siteCovs$habitat_type <- as.factor(siteCovs$habitat_type)
+
+# Function to split wide matrices into 3D arrays
+split_by_season <- function(mat_wide, T, Jmax) {
+  array_3d <- array(NA, dim = c(nrow(mat_wide), T, Jmax))
+  for (t in 1:T) {
+    cols <- ((t - 1)*Jmax + 1):(t*Jmax)
+    array_3d[, t, ] <- as.matrix(mat_wide[, cols])
+  }
+  return(array_3d)
+}
+
+y_array <- split_by_season(y, T = T_seasons, Jmax = Jmax)
+hour_array <- split_by_season(hour_wide, T = T_seasons, Jmax = Jmax)
+hour_array[is.na(hour_array)] <- 1 # Replace NA with 1 (or appropriate default)
+flower_array <- split_by_season(flower_wide, T = T_seasons, Jmax = Jmax)
+flower_array[is.na(flower_array)] <- 1 # Replace NA with 1 (or appropriate default)
+
+# Site-level covariates
+habitat_type <- as.numeric(siteCovs$habitat_type) # Convert to numeric for JAGS
+
+# Yearly site-level covariates (flower abundance per season)
+yearlySiteCovs <- read.table("C:/RD/yearly_site_covs_hummingbirds_lp.txt", head = T)
+flower_matrix <- yearlySiteCovs %>%
+  arrange(ID_transecta, season) %>%
+  pivot_wider(names_from = season,
+              values_from = mean_flower_abundance,
+              names_prefix = "season") %>%
+  select(starts_with("season")) %>%
+  as.matrix()
+flower_matrix <- flower_matrix[, c(2:3,1,4)] # ensure order
+
+# Define constants for JAGS models
+n_sites <- dim(y_array)[1]
+n_seasons <- dim(y_array)[2]
+n_surveys <- dim(y_array)[3]
+```
+
+## 2.3 N-mixture Model: Null Model (`fm0`)
+
+This is a basic N-mixture model without any covariates, modeling initial abundance, survival, recruitment, and detection as constants.
+
+```{r nmixture-fm0, eval=TRUE}
+# Model definition for JAGS
+fm0_jags_code <- "
+model {
+  # Priors
+  lambda ~ dunif(0, 20)      # Initial abundance (Poisson mean)
+  phi ~ dunif(0, 1)         # Apparent survival probability
+  gamma ~ dunif(0, 20)      # Recruitment/colonization (Poisson mean)
+  p ~ dunif(0, 1)           # Detection probability
+
+  for (i in 1:n_sites) {
+    N[i,1] ~ dpois(lambda) # Initial abundance at each site
+
+    for (t in 2:n_seasons) {
+      S[i,t-1] ~ dbin(phi, N[i,t-1]) # Number of survivors from N[i,t-1]
+      R[i,t] ~ dpois(gamma)          # Number of recruits
+      N[i,t] <- S[i,t-1] + R[i,t]    # Abundance at current season
+    }
+
+    for (t in 1:n_seasons) {
+      for (j in 1:max_surveys) {
+        y[i,t,j] ~ dbin(p, N[i,t]) # Observed counts are binomial draws from true abundance
+      }
+    }
+  }
+}
+"
+
+# Data list for JAGS
+data_jags_fm0 <- list(
+  y = y_array,
+  n_sites = n_sites,
+  n_seasons = n_seasons,
+  max_surveys = 4 # Max surveys per season
+)
+
+# Initial values for latent states (N) and parameters
+inits_fm0 <- function() {
+  N_init <- matrix(NA, nrow = n_sites, ncol = n_seasons)
+  # Set initials for season 1 based on max observed counts
+  N_init[,1] <- apply(y_array[,1,,drop=FALSE], 1, max, na.rm=TRUE) + 10
+  # For subsequent seasons, N can be NA as JAGS will initialize them
+  for (t in 2:n_seasons) {
+    N_init[,t] <- NA
+  }
+
+  list(
+    lambda = runif(1, 1, 5),
+    phi = runif(1, 0.5, 1),
+    gamma = runif(1, 0, 3),
+    p = runif(1, 0.1, 0.9),
+    N = N_init
+  )
+}
+
+# Parameters to monitor
+params_fm0 <- c("lambda", "phi", "gamma", "p", "N")
+
+# Run the JAGS model (set eval=TRUE to avoid running long computation during knitting)
+set.seed(99)
+fit_fm0 <- jags(
+  data = data_jags_fm0,
+  inits = inits_fm0,
+  parameters.to.save = params_fm0,
+  model.file = textConnection(fm0_jags_code),
+  n.chains = 3,
+  n.iter = 100000,
+  n.burnin = 10000,
+  n.thin = 50
+)
+
+# Print and summarize results
+print(fit_fm0)
+rhat_values <- fit_fm0$BUGSoutput$summary[, "Rhat"]
+cat("Summary of Rhat values for fm0:\n")
+print(summary(rhat_values))
+
+# Export summary to CSV
+summary_fm0 <- as.data.frame(fit_fm0$BUGSoutput$summary)
+write.csv(summary_fm0, "fit_fm0_summary.csv", row.names = TRUE)
+
+# Save posterior samples (and load if needed later)
+saveRDS(fit_fm0, file = "posterior_samples_fm0.rds")
+# fit_fm0 <- readRDS("C:/RD/posterior_samples_fm0.rds")
+```
+
+## 2.4 N-mixture Model: Time Model (`fm1`)
+
+This model includes covariates for `hour` and `flower_abun` affecting detection probability.
+
+```{r nmixture-fm1, eval=TRUE}
+# Model definition for JAGS
+fm1_jags_code <- "
+  model {
+  # Priors
+  lambda ~ dunif(0, 20)        # Initial abundance
+  phi ~ dunif(0, 1)           # Survival probability
+  gamma ~ dunif(0, 20)        # Recruitment rate
+
+  beta0 ~ dnorm(0, 0.001)        # Intercept for detection on logit scale
+  beta_hour ~ dnorm(0, 0.001)   # Effect of hour on detection
+  beta_flower_p ~ dnorm(0, 0.01) # Effect of flower abundance on detection
+
+  for (i in 1:n_sites) {
+    N[i,1] ~ dpois(lambda) # Initial abundance
+
+    for (t in 2:n_seasons) {
+      S[i,t-1] ~ dbin(phi, N[i,t-1]) # Number of survivors
+      R[i,t] ~ dpois(gamma)          # Number of recruits
+      N[i,t] <- S[i,t-1] + R[i,t]    # Abundance in current season
+    }
+
+    for (t in 1:n_seasons) {
+      for (j in 1:max_surveys) {
+        # Logit-linear model for detection probability
+        logit(p[i,t,j]) <- beta0 + beta_hour*hour[i,t,j] + beta_flower_p*flower_abun[i,t,j]
+        y[i,t,j] ~ dbin(p[i,t,j], N[i,t]) # Observed counts
+      }
+    }
+  }
+}
+"
+# Data list for JAGS
+data_jags_fm1 <- list(
+  y = y_array,
+  hour = hour_array,
+  n_sites = n_sites,
+  n_seasons = n_seasons,
+  max_surveys = 4,
+  flower_abun = flower_array
+)
+
+# Initial values for latent states (N) and parameters
+inits_fm1 <- function() {
+  N_init <- matrix(NA, nrow = n_sites, ncol = n_seasons)
+  for (i in 1:n_sites) {
+    max_y_all <- max(y_array[i,,], na.rm = TRUE)
+    N_init[i, 1] <- ifelse(is.finite(max_y_all), max_y_all + 50, 50) # Initialize N[i,1]
+  }
+
+  list(
+    lambda = runif(1, 1, 5),
+    phi = runif(1, 0.5, 1),
+    gamma = runif(1, 0, 3),
+    beta0 = rnorm(1, 0, 1),
+    beta_hour = rnorm(1, 0, 1),
+    beta_flower_p = rnorm(1, 0, 1),
+    N = N_init
+  )
+}
+
+# Parameters to monitor
+params_fm1 <- c("lambda", "phi", "gamma", "beta0",
+                "beta_hour", "beta_flower_p", "N")
+
+# Run the JAGS model (set eval=TRUE to avoid running long computation during knitting)
+set.seed(99)
+fit_fm1 <- jags(
+  data = data_jags_fm1,
+  inits = inits_fm1,
+  parameters.to.save = params_fm1,
+  model.file = textConnection(fm1_jags_code),
+  n.chains = 6,
+  n.iter = 100000,
+  n.burnin = 10000,
+  n.thin = 50
+)
+
+print(fit_fm1)
+
+# Traceplot and summary of Rhat values for convergence diagnostics
+# fit_fm1 <- readRDS("C:/RD/posterior_samples_fm1.rds") # Load if not run above
+traceplot(fit_fm1)
+
+mcmc_samples <- as.mcmc(fit_fm1)
+mean_deviance_per_chain <- sapply(mcmc_samples, function(chain) {
+  mean(chain[, "deviance"])
+})
+cat("Mean deviance per chain:\n")
+print(mean_deviance_per_chain)
+
+# Subsetting chains (e.g., if some chains did not converge well)
+subset_chains <- mcmc_samples[4:6]
+
+# Compute summary statistics and Gelman-Rubin diagnostics for selected chains
+summary_stats <- summary(subset_chains)
+rhat_diag <- gelman.diag(subset_chains, multivariate = FALSE)$psrf
+
+# Combine results into a data frame
+fit_fm1_summary <- data.frame(
+  Parameter = rownames(summary_stats$statistics),
+  Mean = summary_stats$statistics[, "Mean"],
+  SD = summary_stats$statistics[, "SD"],
+  `2.5%` = summary_stats$quantiles[, "2.5%"],
+  `97.5%` = summary_stats$quantiles[, "97.5%"],
+  Rhat = rhat_diag[, "Point est."],
+  Rhat_UpperCI = rhat_diag[, "Upper C.I."]
+)
+
+print(fit_fm1_summary)
+
+# Export summary to CSV
+write.csv(fit_fm1_summary, "fit_fm1_summary.csv", row.names = TRUE)
+
+# Save posterior samples
+saveRDS(fit_fm1, file = "posterior_samples_fm1.rds")
+```
+
+## 2.5 N-mixture Model: Habitat Model (`fm2`)
+
+This model explores the effect of `habitat_type` on colonization and extinction, with `hour` affecting detection.
+
+```{r nmixture-fm2, eval=TRUE}
+# Model definition for JAGS
+fm2_jags_code <- "
+model {
+  # Priors
+  lambda ~ dgamma(1, 0.1)           # Mean initial abundance
+
+  alpha_p ~ dnorm(0, 0.1)           # Intercept for detection
+  beta_hour ~ dnorm(0, 0.1)         # Effect of hour on detection
+
+  alpha_gamma ~ dnorm(0, 0.1)       # Intercept for colonization (logit scale)
+  beta_gamma ~ dnorm(0, 0.1)        # Effect of habitat_type on colonization
+  # Using habitat[i] as a numeric value. If habitat_type is a factor with >2 levels,
+  # it should be handled with multiple beta coefficients (e.g., beta_gamma[habitat[i]])
+
+  alpha_phi ~ dnorm(0, 0.1)     # Intercept for survival (logit scale)
+  beta_phi ~ dnorm(0, 0.1)      # Effect of habitat_type on survival (phi = 1 - extinction)
+
+  for (i in 1:n_sites) {
+    # Initial abundance
+    N[i,1] ~ dpois(lambda)
+
+    # Detection process for season 1
+    for (j in 1:n_visits) {
+      logit(p[i,1,j]) <- alpha_p + beta_hour*hour[i,1,j]
+      y[i,1,j] ~ dbin(p[i,1,j], N[i,1])
+    }
+
+    for (t in 2:n_seasons) {
+      # Colonization and Extinction (on logit scale)
+      logit(gamma[i,t-1]) <- alpha_gamma + beta_gamma*habitat[i]
+      logit(phi[i,t-1]) <- alpha_phi + beta_phi*habitat[i]
+
+      S[i,t-1] ~ dbin(phi[i,t-1], N[i,t-1])  # Number of survivors (phi is survival)
+      G[i,t-1] ~ dpois(gamma[i,t-1])         # Number of colonizers (recruits)
+      N[i,t] <- S[i,t-1] + G[i,t-1]          # Abundance at current season
+
+      # Detection process for subsequent seasons
+      for (j in 1:n_visits) {
+        y[i,t,j] ~ dbin(p[i,t,j], N[i,t])
+        logit(p[i,t,j]) <- alpha_p + beta_hour*hour[i,t,j]
+      }
+    }
+  }
+}
+"
+# Prepare data for JAGS
+jags_data_fm2 <- list(
+  n_sites = dim(y_array)[1],
+  n_seasons = dim(y_array)[2],
+  n_visits = dim(y_array)[3],
+  y = y_array,
+  hour = hour_array,
+  habitat = as.numeric(siteCovs$habitat_type) # Ensure habitat is numeric (1, 2, ...)
+)
+
+# Initial values
+inits_fm2 <- function() {
+  N_init <- matrix(NA, nrow = jags_data_fm2$n_sites, ncol = jags_data_fm2$n_seasons)
+  for (i in 1:jags_data_fm2$n_sites) {
+    max_y1 <- max(jags_data_fm2$y[i, 1, ], na.rm = TRUE)
+    N_init[i, 1] <- ifelse(is.finite(max_y1), max_y1 + 300, 300)
+  }
+
+  list(
+    alpha_gamma = rnorm(1, 0, 1),
+    beta_gamma = rnorm(1, 0, 1),
+    alpha_phi = rnorm(1, 0 , 1),
+    beta_phi = rnorm(1, 0, 1),
+    alpha_p = rnorm(1, 0, 1),
+    beta_hour = rnorm(1, 0, 1),
+    N = N_init
+  )
+}
+
+# Parameters to monitor
+params_fm2 <- c("lambda",
+            "alpha_gamma", "beta_gamma",
+            "alpha_phi", "beta_phi",
+            "alpha_p", "beta_hour")
+
+# Run JAGS model (set eval=TRUE to avoid running long computation during knitting)
+set.seed(99)
+fit_fm2 <- jags(
+  data = jags_data_fm2,
+  inits = inits_fm2,
+  parameters.to.save = params_fm2,
+  model.file = textConnection(fm2_jags_code),
+  n.chains = 3,
+  n.iter = 100000,
+  n.burnin = 50000,
+  n.thin = 50
+)
+
+# Print and summarize results
+rhat_values <- fit_fm2$BUGSoutput$summary[, "Rhat"]
+cat("Summary of Rhat values for fm2:\n")
+print(summary(rhat_values))
+print(fit_fm2)
+traceplot(fit_fm2)
+
+# Export summary to CSV
+summary_fm2 <- as.data.frame(fit_fm2$BUGSoutput$summary)
+write.csv(summary_fm2, "fit_fm2_summary.csv", row.names = TRUE)
+
+# Save posterior samples
+saveRDS(fit_fm2, file = "posterior_samples_fm2.rds")
+# fit_fm2 <- readRDS("C:/RD/posterior_samples_fm2.rds") # Load if not run above
+```
+
+## 2.6 N-mixture Model: Flower Model (`fm3`)
+
+This model incorporates the effect of mean `flower_abundance` on colonization and extinction, and individual `flower_abun` on detection.
+
+```{r nmixture-fm3, eval=TRUE}
+# Model definition for JAGS
+fm3_jags_code <- "
+model {
+  # Priors
+  lambda ~ dgamma(1, 0.1)             # Mean initial abundance
+
+  alpha_p ~ dnorm(0, 0.1)             # Intercept for detection
+  beta_hour ~ dnorm(0, 0.1)           # Effect of hour on detection
+  beta_flower_p ~ dnorm(0, 0.1)       # Effect of flower abundance on detection (observation level)
+
+  alpha_gamma ~ dnorm(0, 0.1)         # Intercept for colonization (logit)
+  beta_gamma ~ dnorm(0, 0.1)          # Effect of mean flower abundance on colonization (yearly level)
+
+  alpha_phi ~ dnorm(0, 0.1)           # Intercept for survival (logit)
+  beta_phi ~ dnorm(0, 0.1)            # Effect of mean flower abundance on survival (yearly level)
+
+  for (i in 1:n_sites) {
+    N[i,1] ~ dpois(lambda) # Initial abundance
+
+    for (j in 1:n_visits) {
+      logit(p[i,1,j]) <- alpha_p + beta_hour*hour[i,1,j] + beta_flower_p*flower_abun[i,1,j]
+      y[i,1,j] ~ dbin(p[i,1,j], N[i,1])
+    }
+
+    for (t in 2:n_seasons) {
+      # Colonization and Survival (phi = 1 - extinction)
+      logit(gamma[i,t-1]) <- alpha_gamma + beta_gamma*mean_flower[i,t-1]
+      logit(phi[i,t-1]) <- alpha_phi + beta_phi*mean_flower[i,t-1]
+
+      S[i,t-1] ~ dbin(phi[i,t-1], N[i,t-1]) # Number of survivors
+      G[i,t-1] ~ dpois(gamma[i,t-1])        # Number of recruits
+      N[i,t] <- S[i,t-1] + G[i,t-1]         # Abundance at current season
+
+      for (j in 1:n_visits) {
+        logit(p[i,t,j]) <- alpha_p + beta_hour*hour[i,t,j] + beta_flower_p*flower_abun[i,t,j]
+        y[i,t,j] ~ dbin(p[i,t,j], N[i,t])
+      }
+    }
+  }
+}
+"
+
+jags_data_fm3 <- list(
+  n_sites = dim(y_array)[1],
+  n_seasons = dim(y_array)[2],
+  n_visits = dim(y_array)[3],
+  y = y_array,
+  hour = hour_array,
+  flower_abun = flower_array,
+  mean_flower = flower_matrix[,2:4] # Seasons 2, 3, 4 for colonization/extinction from seasons 1, 2, 3
+)
+
+inits_fm3 <- function() {
+  N_init <- matrix(NA, nrow = jags_data_fm3$n_sites, ncol = jags_data_fm3$n_seasons)
+  for (i in 1:jags_data_fm3$n_sites) {
+    max_y1 <- max(jags_data_fm3$y[i, 1, ], na.rm = TRUE)
+    N_init[i, 1] <- ifelse(is.finite(max_y1), max_y1 + 800, 800)
+  }
+
+  list(
+    alpha_gamma = rnorm(1, 0, 1),
+    beta_gamma = rnorm(1, 0, 1),
+    alpha_phi = rnorm(1, 0, 1),
+    beta_phi = rnorm(1, 0, 1),
+    alpha_p = rnorm(1, 0, 1),
+    beta_hour = rnorm(1, 0, 1),
+    beta_flower_p = rnorm(1, 0, 1),
+    N = N_init
+  )
+}
+
+params_fm3 <- c("lambda", "alpha_gamma", "beta_gamma",
+  "alpha_phi", "beta_phi", "alpha_p", "beta_hour", "beta_flower_p")
+
+set.seed(10)
+fit_fm3 <- jags(
+  data = jags_data_fm3,
+  inits = inits_fm3,
+  parameters.to.save = params_fm3,
+  model.file = textConnection(fm3_jags_code),
+  n.chains = 6,
+  n.iter = 100000,
+  n.burnin = 50000,
+  n.thin = 50
+)
+
+# Traceplot and summary of Rhat values for convergence diagnostics
+traceplot(fit_fm3)
+mcmc_samples <- as.mcmc(fit_fm3)
+mean_deviance_per_chain <- sapply(mcmc_samples, function(chain) {
+  mean(chain[, "deviance"])
+})
+cat("Mean deviance per chain:\n")
+print(mean_deviance_per_chain)
+
+# Subsetting chains (e.g., if some chains did not converge well)
+subset_chains <- mcmc_samples[2:4]
+
+# Compute summary statistics and Gelman-Rubin diagnostics for selected chains
+summary_stats <- summary(subset_chains)
+rhat_diag <- gelman.diag(subset_chains, multivariate = FALSE)$psrf
+
+# Combine results into a data frame
+fit_fm3_summary <- data.frame(
+  Parameter = rownames(summary_stats$statistics),
+  Mean = summary_stats$statistics[, "Mean"],
+  SD = summary_stats$statistics[, "SD"],
+  `2.5%` = summary_stats$quantiles[, "2.5%"],
+  `97.5%` = summary_stats$quantiles[, "97.5%"],
+  Rhat = rhat_diag[, "Point est."],
+  Rhat_UpperCI = rhat_diag[, "Upper C.I."]
+)
+
+print(fit_fm3_summary)
+
+# Export summary to CSV
+write.csv(fit_fm3_summary, "fit_fm3_summary.csv", row.names = TRUE)
+
+# Save posterior samples
+saveRDS(fit_fm3, file = "posterior_samples_fm3.rds")
+# fit_fm3 <- readRDS("C:/RD/posterior_samples_fm3.rds") # Load if not run above
+```
+
+## 2.7 Model Comparisons (DIC)
+
+Compare the N-mixture models using Deviance Information Criterion (DIC).
+
+```{r dic-comparison, eval=TRUE}
+# Print DIC and pV for each model
+cat("DIC for fm0:", fit_fm0$BUGSoutput$DIC, "\tpV for fm0:", fit_fm0$BUGSoutput$pV, "\n")
+cat("DIC for fm1:", fit_fm1$BUGSoutput$DIC, "\tpV for fm1:", fit_fm1$BUGSoutput$pV, "\n")
+cat("DIC for fm2:", fit_fm2$BUGSoutput$DIC, "\tpV for fm2:", fit_fm2$BUGSoutput$pV, "\n")
+cat("DIC for fm3:", fit_fm3$BUGSoutput$DIC, "\tpV for fm3:", fit_fm3$BUGSoutput$pV, "\n")
+```
+
+# 3. Best Model Plots (from `fm1`)
+
+This section generates plots based on the N-mixture `fm1` model (Time Model), which includes effects of `hour` and `flower_abun` on detection. It visualizes the estimated detection probability as a function of these covariates and also seasonal abundance.
+
+```{r best-model-plots, eval=TRUE}
+# Load the best model's posterior samples
+fit_fm1 <- readRDS("C:/RD/posterior_samples_fm1.rds")
+ObsCovs <- read.table("C:/RD/obs_covs_hummingbirds_lp.txt", head = T)
+
+# Extract relevant posterior samples
+sims_array <- fit_fm1$BUGSoutput$sims.array
+
+# Keep only chains 4 to 6 (as identified from traceplots/diagnostics for good convergence)
+sims_subset <- sims_array[, 4:6, ]
+
+# Flatten to iterations*chains × parameters for easier processing
+dim_combined <- dim(sims_subset)
+n_iter_subset <- dim_combined[1]
+n_chain_subset <- dim_combined[2]
+n_param_subset <- dim_combined[3]
+
+sims_flat <- matrix(NA, nrow = n_iter_subset * n_chain_subset, ncol = n_param_subset)
+for (p in 1:n_param_subset) {
+  sims_flat[, p] <- c(sims_subset[,,p])
+}
+colnames(sims_flat) <- dimnames(sims_subset)[[3]]
+post_subset <- as.data.frame(sims_flat)
+
+# Create prediction grid for hour
+hour_seq <- seq(min(ObsCovs$hora_decimal, na.rm = TRUE),
+                max(ObsCovs$hora_decimal, na.rm = TRUE), length.out = 100)
+mean_flower <- mean(ObsCovs$flower_abun, na.rm = TRUE)
+
+# Create prediction grid for flower abundance
+flower_seq <- seq(min(ObsCovs$flower_abun, na.rm = TRUE),
+                  max(ObsCovs$flower_abun, na.rm = TRUE), length.out = 100)
+mean_hour <- mean(ObsCovs$hora_decimal, na.rm = TRUE)
+
+# Predict detection probability across hour_seq
+pred_hour <- sapply(1:nrow(post_subset), function(i) {
+  logit_p <- post_subset$beta0[i] +
+                  post_subset$beta_hour[i]*hour_seq +
+                    post_subset$beta_flower_p[i]*mean_flower
+  plogis(logit_p)
+})
+
+# Summarize posterior predictive mean and 95% credible interval for hour
+df_hour <- data.frame(
+  hour = hour_seq,
+  p_mean = rowMeans(pred_hour),
+  p_low = apply(pred_hour, 1, quantile, probs = 0.025),
+  p_high = apply(pred_hour, 1, quantile, probs = 0.975)
+)
+
+# Predict detection probability across flower_seq
+pred_flower <- sapply(1:nrow(post_subset), function(i) {
+  logit_p <- post_subset$beta0[i] +
+                 post_subset$beta_hour[i]*mean_hour +
+                    post_subset$beta_flower_p[i]*flower_seq
+  plogis(logit_p)
+})
+
+# Summarize posterior predictive mean and 95% credible interval for flower abundance
+df_flower <- data.frame(
+  flower_abun = flower_seq,
+  p_mean = rowMeans(pred_flower),
+  p_low = apply(pred_flower, 1, quantile, probs = 0.025),
+  p_high = apply(pred_flower, 1, quantile, probs = 0.975)
+)
+
+library(ggplot2)
+
+### Plot: Hour Effect on Detection
+ggplot(df_hour, aes(x = hour, y = p_mean)) +
+  geom_line(color = "steelblue", linewidth = 1) +
+  geom_ribbon(aes(ymin = p_low, ymax = p_high), alpha = 0.2, fill = "steelblue") +
+  labs(y = "Detection probability", x = "Time of the day", title = "Effect of Hour on Detection") +
+  theme_minimal()
+
+### Plot: Flower Abundance Effect on Detection
+ggplot(df_flower, aes(x = flower_abun, y = p_mean)) +
+  geom_line(color = "darkgreen", size = 1) +
+  geom_ribbon(aes(ymin = p_low, ymax = p_high), alpha = 0.2, fill = "darkgreen") +
+  labs(y = "Detection probability", x = "Flower abundance", title = "Effect of Flower Abundance on Detection") +
+  theme_minimal()
+```
