@@ -1,6 +1,6 @@
 ---
 title: "Occupancy and N-mixture Models for Gilded Sapphire Hummingbirds"
-author: "R User"
+author: "Facundo X. Palacio"
 date: "June 7, 2025"
 output:
   html_document:
