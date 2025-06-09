@@ -404,8 +404,8 @@ cat("Summary of Rhat values for fm0:\n")
 print(summary(rhat_values))
 
 # Export summary to CSV
-summary_fm0 <- as.data.frame(fit_fm0$BUGSoutput$summary)
-write.csv(summary_fm0, "fit_fm0_summary.csv", row.names = TRUE)
+# summary_fm0 <- as.data.frame(fit_fm0$BUGSoutput$summary)
+# write.csv(summary_fm0, "fit_fm0_summary.csv", row.names = TRUE)
 
 # Save posterior samples (and load if needed later)
 saveRDS(fit_fm0, file = "posterior_samples_fm0.rds")
@@ -497,7 +497,7 @@ fit_fm1 <- jags(
 print(fit_fm1)
 
 # Traceplot and summary of Rhat values for convergence diagnostics
-# fit_fm1 <- readRDS("C:/RD/posterior_samples_fm1.rds") # Load if not run above
+# fit_fm1 <- readRDS("posterior_samples_fm1.rds") # Load if not run above
 traceplot(fit_fm1)
 
 mcmc_samples <- as.mcmc(fit_fm1)
@@ -528,10 +528,10 @@ fit_fm1_summary <- data.frame(
 print(fit_fm1_summary)
 
 # Export summary to CSV
-write.csv(fit_fm1_summary, "fit_fm1_summary.csv", row.names = TRUE)
+# write.csv(fit_fm1_summary, "fit_fm1_summary.csv", row.names = TRUE)
 
 # Save posterior samples
-saveRDS(fit_fm1, file = "posterior_samples_fm1.rds")
+# saveRDS(fit_fm1, file = "posterior_samples_fm1.rds")
 ```
 
 ## 2.5 N-mixture Model: Habitat Model (`fm2`)
@@ -640,12 +640,12 @@ print(fit_fm2)
 traceplot(fit_fm2)
 
 # Export summary to CSV
-summary_fm2 <- as.data.frame(fit_fm2$BUGSoutput$summary)
-write.csv(summary_fm2, "fit_fm2_summary.csv", row.names = TRUE)
+# summary_fm2 <- as.data.frame(fit_fm2$BUGSoutput$summary)
+# write.csv(summary_fm2, "fit_fm2_summary.csv", row.names = TRUE)
 
 # Save posterior samples
-saveRDS(fit_fm2, file = "posterior_samples_fm2.rds")
-# fit_fm2 <- readRDS("C:/RD/posterior_samples_fm2.rds") # Load if not run above
+# saveRDS(fit_fm2, file = "posterior_samples_fm2.rds")
+# fit_fm2 <- readRDS("posterior_samples_fm2.rds") # Load if not run above
 ```
 
 ## 2.6 N-mixture Model: Flower Model (`fm3`)
@@ -769,11 +769,11 @@ fit_fm3_summary <- data.frame(
 print(fit_fm3_summary)
 
 # Export summary to CSV
-write.csv(fit_fm3_summary, "fit_fm3_summary.csv", row.names = TRUE)
+# write.csv(fit_fm3_summary, "fit_fm3_summary.csv", row.names = TRUE)
 
 # Save posterior samples
-saveRDS(fit_fm3, file = "posterior_samples_fm3.rds")
-# fit_fm3 <- readRDS("C:/RD/posterior_samples_fm3.rds") # Load if not run above
+# saveRDS(fit_fm3, file = "posterior_samples_fm3.rds")
+# fit_fm3 <- readRDS("posterior_samples_fm3.rds") # Load if not run above
 ```
 
 ## 2.7 Model Comparisons (DIC)
