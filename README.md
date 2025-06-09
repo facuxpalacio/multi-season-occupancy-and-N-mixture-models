@@ -1,4 +1,4 @@
-# Occupancy and N-mixture Models for Gilded Sapphire Hummingbirds
+# Occupancy and N-mixture models for Gilded Sapphire hummingbirds
 
 This repository contains an R Markdown project designed for analyzing ecological data related to Gilded Sapphire hummingbird populations. It employs both **Occupancy Models** (using the `unmarked` package) and **N-mixture Models** (using Bayesian inference with `R2jags`) to estimate population parameters while accounting for imperfect detection.
 
